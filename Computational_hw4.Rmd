@@ -1,0 +1,493 @@
+---
+title: "The role of propensity scores in observational study"
+output: pdf_document
+---
+
+
+## Submission Instructions 
+
+Homework 4 will be manually graded. You may work with 1 partner and turn in a single submission for both group members. Make sure to include the names of both group members below: 
+
+**First and Last names of both group members: Xinyu Wang**
+
+**Turn in 1 submission for both students**
+
+## Objective
+This assignment will give you the opportunity to practice several different propensity score approaches to causal inference. In addition you will be asked to interpret the resulting output and discuss the assumptions necessary for causal inference. 
+
+## R Packages
+You will need to use an R package that you may not already have installed, arm. 
+```{r}
+if(isFALSE('arm' %in% installed.packages())){
+  install.packages('arm')
+}
+
+library(arm)
+```
+
+
+## Problem Statement
+In this assignment you will use data from a constructed observational study. The data and an associated data dictionary are available in the assignment information. For this assignment imagine the funders of the IHDP program asked you to conduct an evaluation of whether the IHDP program actually led to improved developmental outcomes at age 3. 
+
+The treatment group for the study that the data are drawn from is the group of children who participated in the IHDP intervention discussed in class. The research question of interest focuses on the effect of the IHDP intervention on age 3 IQ scores for the children that participated in it. The data for the comparison sample of children was pulled from the National Longitudinal Study of Youth during a similar period of time that the data were collected for the IHDP study.
+
+In the data the outcome variable is `ppvtr.36` and the treatment variable is `treat`. For the assignment on the computational track you can assume all variables are pre-treatment variables. 
+
+#### Question 1: Load the data and choose confounders (5 points)
+Load the data from the IHDP.csv file on brightspace and choose the covariates you want to use as confounders. To avoid making unnecessary parametric assumptions you may want to choose binary indicators of unordered categorical variables (rather than a variable labeled e.g. as 1, 2, 3 for different levels of a categorical variable). 
+
+Create a new data frame for analysis that includes the outcome in the 1st column, the treatment indicator in the 2nd column, and the covariates in the remaining columns. Be thoughtful about your choices with respect to the nature of the covariates (e.g. is an unordered categorical being represented as such) and timing (don't control for post-treatment variables!). Provide your code and a list of the variable names for the confounder variables chosen.
+
+*Now reduce this data frame to include only observations for children whose birthweight is less than 3000 grams.*
+
+
+```{r}
+# load data
+library(dplyr)
+
+df <- read.csv("IHDP.csv")
+df <- df[,c(ncol(df),(ncol(df)-1),3:ncol(df)-2,2,1)]
+ihdp <- df[,1:(ncol(df)-2)]
+head(ihdp)
+```
+
+
+```{r}
+# code to reduce data to include only observations for children whose birthweight is less than 3000 grams
+ihdp <- ihdp[ihdp$bw<3000,]
+```
+
+
+```{r}
+# print out the names of all your confounders
+covs <- 3:ncol(ihdp)
+cov_names <- colnames(ihdp)[3:ncol(ihdp)]
+```
+
+#### Question 2: Estimate the propensity score (5 points)
+Estimate the propensity score. That is, fit a propensity score model and save the predicted scores. For now use a logistic regression with all confounders as predictors.  
+
+```{r}
+# code for initial p.score model 
+propensity_model <- glm(treat ~ momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income,family = binomial,data=ihdp)
+
+ihdp$initial_pscore <- predict(propensity_model,type = "response")
+#ihdp$initial_pscore
+```
+
+
+#### Question 3: Create a weight variable that will let you perform an analysis on a dataset using matching with replacement. 
+
+**Part a** (5 points) 
+Before creating the weight variable you need to determine your estimand. Given the description above about the research question, what is the estimand of interest? (1-word will do)
+
+Ans: ATT
+
+
+**Part b** (5 points) 
+Now perform *one-to-one nearest neighbor matching with replacement* using your estimated propensity score from Question 2. Perform this matching using the matching command in the arm package. The "cnts" variable in the output reflects the number of times each control observation was used as a match. 
+
+```{r}
+# code for matching here
+library(arm)
+
+matches <- matching(z=ihdp$treat, score=ihdp$initial_pscore,replace=TRUE)
+matched <- matches$cnts
+ihdp$matched<- matched
+#ihdp$nearest_neighbor_pscore
+```
+
+
+#### Question 4: Check overlap and balance. 
+
+**Part a** (5 points) 
+Examining Overlap. Check overlap on the raw data (that is the data before matching) using some diagnostic plots. Check overlap for the propensity scores as well as two other covariates. Choose two covaraites that you believe are most likely to have lack of overlap. Note that it may be necessary to exclude some observations from the plots if they are being obscured in ways similar to the example discussed in class.
+
+```{r}
+# code to check overlap of p.score
+library(personalized)
+prop.func <- function(x, trt){
+    propensity_model <- glm(treat ~ momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + 
+                                     bw + bwg + preterm + black + hispanic + white + lths + 
+                                     hs + ltcoll + college + dayskidh + income,family = binomial,data=ihdp)
+
+    initial_pscore <- predict(propensity_model,type = "response")
+    initial_pscore
+}
+check.overlap(x = ihdp,
+              trt = ihdp$treat,
+              propensity.func = prop.func)
+```
+
+```{r}
+
+# overlap of one covariate 
+# Combine the treatment and control datasets and create a variable to indicate the group
+ihdp$group <- ifelse(ihdp$treat == 1, "Treatment", "Control")
+
+# Plotting with ggplot2
+ggplot(ihdp, aes(x = bw, fill = group)) +
+  geom_histogram(position="identity",alpha = 0.5, binwidth = 50) + 
+  labs(title = "Distribution of birth weights",
+       x = "Initial Propensity Score", 
+       y = "Count") +
+  scale_fill_manual(values = c("Treatment" = "blue", "Control" = "red")) + # Colors for each group
+  theme_minimal()
+```
+
+```{r}
+# overlap of another covariate 
+ggplot(ihdp, aes(x = momage, fill = group)) +
+  geom_histogram(position="identity",alpha = 0.5, binwidth = 0.7) + 
+  labs(title = "Distribution of mom age at birth",
+       x = "Initial Propensity Score", 
+       y = "Count") +
+  scale_fill_manual(values = c("Treatment" = "blue", "Control" = "red")) + # Colors for each group
+  theme_minimal()
+```
+
+**Part b** (5 points)  
+Interpreting Overlap. What do these plots reveal about the overlap required to estimate our estimand of interest?
+
+
+The plots above show the imbalance of the raw data before matching and there are overlaps for the p score and the two corvariate(child's birth weights and mom age of birth). We need to do the pscore matching later to decrease the influence of the covariate in casual inference and decrease the bias of estimation of estimand of interest, in this case, ATT.
+
+
+**Part c** (5 points) 
+Examining Balance. You will build your own function to check balance!  This function should take as inputs (at least) the data frame created in Question 1, the vector with the covariate names chosen in Question 1, and the weights created in Question 3. It should output the following:
+
+1) Mean in the pre-match treatment group
+2) Mean in the pre-match control group
+3) Mean in the matched treatment group*
+4) Mean in the matched control group
+5) Pre-match mean difference (standardized for continuous variables, not standardized for binary variables)
+6) Matched mean difference (standardized for continuous variables, not standardized for binary variables)
+7) Ratio of standard deviations across pre-match groups (control/treated)
+8) Ratio of standard deviations across matched groups (control/treated)
+
+I provide a "unit test" of this function below to help ensure that you are doing the right thing.
+
+*This will only differ from column (1) if you restrict your dataset to observations with common support.*
+
+
+```{r}
+is_binary <- function(covariates) {
+  length(unique(covariates)) == 2
+}
+
+check_balance <- function(data, covariates, weights) {
+  # Split the original data into treatment and control groups
+  treated <- data[data$treat == 1, ]
+  control <- data[data$treat == 0, ]
+  
+  n_treated <- nrow(treated)
+  n_control <- nrow(control)
+  # Split the matched data similarly
+  treated_matched <- treated
+  # you must subset 'weights' just like you did with 'control'.
+  control_weights <- weights[data$treat == 0]
+
+# Let's also make sure that 'control_weights' is a whole number since you can't replicate rows fractionally.
+# If weights are floating-point numbers, they should be very close to integer values, and you can round them.
+  control_weights <- round(control_weights)
+
+# Now, replicate the indices of 'control' based on 'control_weights'.
+  indices_to_repeat <- rep(seq_along(control_weights), times = control_weights)
+
+# Subset 'control' based on these indices to create your matched control set.
+  control_matched <- control[indices_to_repeat, ]
+  
+  # Functions to calculate means and standard deviations
+  calc_means <- function(df) sapply(df[covariates], mean, na.rm = TRUE)
+  calc_sds <- function(df) sapply(df[covariates], sd, na.rm = TRUE)
+  
+  calc_pooled_sd <- function(sd_treat, sd_control, n_treat, n_control) {
+  sqrt(((n_treat - 1) * sd_treat^2 + (n_control - 1) * sd_control^2) / (n_treat + n_control - 2))
+  }
+  
+  # Calculate the pre-matching and post-matching statistics
+  pre_means_treated <- calc_means(treated)
+  pre_means_control <- calc_means(control)
+  post_means_treated <- calc_means(treated_matched)
+  post_means_control <- calc_means(control_matched)
+
+  pre_sds_treated <- calc_sds(treated)
+  pre_sds_control <- calc_sds(control)
+  post_sds_treated <- calc_sds(treated_matched)
+  post_sds_control <- calc_sds(control_matched)
+
+  pre_pooled_sd <- calc_pooled_sd(pre_sds_treated, pre_sds_control, n_treated, n_control)
+  post_pooled_sd <- calc_pooled_sd(post_sds_treated, post_sds_control, n_treated, n_control)
+  
+  # Calculate mean differences and standard deviation ratios
+  calculate_differences <- function(pre_treated, pre_control, post_treated, post_control) {
+    pre_diff <- pre_treated - pre_control
+    post_diff <- post_treated - post_control
+    list(pre = pre_diff, post = post_diff)
+  }
+
+  # Correcting the calculation of mean differences and standard deviation ratios
+  pre_mean_diff <- pre_means_treated - pre_means_control
+  post_mean_diff <- post_means_treated -post_means_control
+  # Calculate the ratios of standard deviations
+  pre_ratio_std <- pre_sds_control / pre_sds_treated
+  post_ratio_std <- post_sds_control / post_sds_treated
+  
+  binary_flags <- sapply(data[covariates], is_binary)
+  # Combine everything into a data frame, ensuring that we're using list elements correctly
+  balance_table <- data.frame(
+    variable = covariates,
+    mn1 = round(pre_means_treated,3),
+    mn0 = round(pre_means_control,3),
+    mn1.m = round(post_means_treated,3),
+    mn0.m = round(post_means_control,3),
+    diff = round(ifelse(binary_flags,pre_mean_diff,pre_mean_diff/pre_pooled_sd),3),  
+    diff.m = round(ifelse(binary_flags,post_mean_diff,post_mean_diff/post_pooled_sd),3),  
+    ratio = round(pre_ratio_std,3), 
+    ratio.m = round(post_ratio_std,3) 
+  )
+
+  return(balance_table)
+}
+```
+
+
+Unit Test. **Show the results of your balance function on a simple example where the propensity score is fit using logistic regression on bw and b.marr and the matching is performed using 1-1 nearest neighbor matching with replacement.** If your results match these you can be reasonably sure you built the function correctly.
+
+\begin{verbatim}
+             mn1       mn0     mn1.m     mn0.m    diff  diff.m  ratio  ratio.m
+bw      2008.648  2629.482  2008.648  2001.838  -2.191   0.024  1.175   1.044
+b.marr     0.431     0.595     0.431     0.486  -0.164  -0.055  0.000   0.000
+\end{verbatim}
+
+```{r}
+# show balance function matches unit test here
+propensity1 <- glm(treat ~ b.marr + bw,family = binomial,data=ihdp)
+pscore1 <- predict(propensity1,type = "response")
+
+matches1 <- matching(z=ihdp$treat, score=pscore1,replace=TRUE)
+matched1 <- matches1$cnts
+
+cov_names1 <- c("bw","b.marr")
+check_balance(data = ihdp, covariates = cov_names1, weights = matched1)
+```
+
+**Part d** (5 points) 
+Using your new balance function, check of the balance for your confounders. Make sure to print your balance statistics. 
+
+```{r}
+#print balance of all confounders 
+check_balance(ihdp,cov_names,matched)
+```
+
+**Part e** (5 points)
+How do you interpret the resulting balance?  In particular what are your concerns with regard to covariates that are not well balanced (3-4 sentences at most).
+
+Some covariates has made the ratio of the standard deviation after matching much more close to 1 than ratio of standard deviation and the mean difference after matching is much more close to 0 than the mean difference before matching, which means some covariates has become a little bit more balanced. However, three of the covariates are not well balanced, namely, momage,b.marr and preterm. These three have more deviations from 1 of ratio after matching than before matching and this means these three covariates are imbalanced. 
+
+#### Question 5: Creating a better matching model 
+It is rare that your first specification of the propensity score model or choice of matching method is the best. Your goal in this assignment is to achieve an absolute value standardized difference in means of lower than .11 for all confounders. Note in practice you would want to get the best balance possible but for this assignment only you can use .11 as the goal. You will lose 2 points for each confounder that is equal or above .11. *note there are 125 possible points in this assignment*. 
+
+```{r}
+propensity_model <- glm(treat ~ momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income,family = binomial,data=ihdp)
+
+ihdp$pscore <- predict(propensity_model,type = "response")
+
+library(MatchIt)
+
+# Perform radius matching with a specified caliper
+#caliper_val <- 0.05
+match_out <- matchit(treat ~ pscore, data = ihdp, method = "full",distance="logit", caliper=0.01)
+
+check_balance(ihdp,cov_names,match_out$weights)
+
+
+# for imbalanced covariates
+match_out_mahalanobis <- matchit(treat ~ momage, data = ihdp, distance="logit",method = "nearest")
+
+# check these covariates again
+check_balance(ihdp, c("momage"), match_out_mahalanobis$weights)
+```
+
+
+**Part a** (5 points) 
+In part a you will explore fitting different propensity score models and/or using different matching techniques to improve the balance. This will likely take many attempts. Report the code you used to fit your final propensity score model (i.e. the one that creates the best balance in your estimation) and create matches using this estimated score.  
+
+```{r}
+# final pscore model and matching code
+propensity_match <- function(data, treat_formula, covariate_names, distance_method = "logit", caliper_value = 0.01) {
+  
+  # Fit the propensity score model
+  propensity_model <- glm(treat_formula, family = binomial, data = data)
+  
+  # Compute propensity scores
+  data$pscore <- predict(propensity_model, type = "response")
+  
+  # Perform matching using the full method
+  match_out <- matchit(treat ~ pscore, data = data, method = "full", distance = distance_method, caliper = caliper_value)
+  
+  # Perform nearest neighbor matching for imbalanced covariates
+  match_out_mahalanobis <- matchit(treat ~ momage, data = data, distance = distance_method, method = "nearest",replace=TRUE)
+  
+  # Check balance for "momage" covariate
+  balance_check_full <- check_balance(data,cov_names,match_out$weights)
+  balance_check_momage <- check_balance(data, c("momage"), match_out_mahalanobis$weights)
+  
+  return(list(
+    match_out = match_out,
+    match_out_momage = match_out_mahalanobis,
+    balance_full = balance_check_full,
+    balance_momage = balance_check_momage
+  ))
+}
+
+result <- propensity_match(ihdp, treat ~ momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income, cov_names)
+
+```
+
+
+**Part b** (20 points) 
+Using your balance function, print the balance of all your confounders using your final propensity score model from part a to create the propensity score and subsequent matches. 
+
+```{r}
+# print balance
+print(result$balance_full)
+print(result$balance_momage)
+```
+
+**Part c** (5 points) 
+Examining Overlap of matched data. Check overlap on the matched data (that is the data after matching) using some diagnostic plots. Check overlap for the propensity scores as well as the same two covariates from earlier . Note that it may be necessary to exclude some observations from the plots if they are being obscured in ways similar to the example discussed in class.
+
+```{r}
+# overlap of p.score
+library(ggplot2)
+
+result <- propensity_match(ihdp, treat ~ momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income, cov_names)
+matched_data <- match.data(result$match_out)  # Extract matched data from match_out object
+matched_data_momage <- match.data(result$match_out_momage)
+
+
+ggplot(matched_data, aes(x = initial_pscore, fill = group)) +
+  geom_histogram(position="identity",alpha = 0.5, binwidth = 0.01) + 
+  labs(title = "Distribution of Propensity Scores",
+       x = "Initial Propensity Score", 
+       y = "Count") +
+  scale_fill_manual(values = c("Treatment" = "blue", "Control" = "red")) + # Colors for each group
+  theme_minimal()
+```
+
+```{r}
+# overlap of a covariate 
+ggplot(matched_data_momage, aes(x = momage, fill = group)) +
+  geom_histogram(position="identity",alpha = 0.5, binwidth = 0.5) + 
+  labs(title = "Distribution of mom age at birth",
+       x = "Initial Propensity Score", 
+       y = "Count") +
+  scale_fill_manual(values = c("Treatment" = "blue", "Control" = "red")) + # Colors for each group
+  theme_minimal()
+```
+
+
+```{r}
+# overlap of another covariate 
+ggplot(matched_data, aes(x = bw, fill = group)) +
+  geom_histogram(position="identity",alpha = 0.5, binwidth = 25) + 
+  labs(title = "Distribution of birth weights",
+       x = "Initial Propensity Score", 
+       y = "Count") +
+  scale_fill_manual(values = c("Treatment" = "blue", "Control" = "red")) + # Colors for each group
+  theme_minimal()
+```
+
+#### Question 6: Using IPTW.
+**Part a** Model (5 points)  
+Estimate propensity scores and use this pscore model to create IPTW weights. Show all your code used to create your weights. 
+
+Make sure that you create weights specific to the correct estimand. 
+
+```{r}
+# code for IPTW model
+library(MatchIt)
+ihdp$weights <- ifelse(ihdp$treat == 1, 
+                        1,  
+                        ihdp$pscore / (1 - ihdp$initial_pscore)) 
+
+```
+
+**Part b** Balance (5 points)
+Using your balance function, check the balance from your IPTW model
+
+```{r}
+# IPTW balance
+check_balance(ihdp,cov_names,ihdp$weights)
+```
+
+#### Question 7: Matching vs IPTW (5 points)
+Which approach would you choose, your matching model from Question 5 or your IPTW model from question 6, justify your choice? (1 paragraph at most)
+I prefer to choose matching model from Question 5 because this model has made the absolute values of standardized difference in means less than 0.11 but for IPTW model from Question 6, work.dr,bw,bwg,preterm and income have the standardized difference in means more than 0.11 which means that these five covariates are not well matched.
+#### Question 8: Estimate the treatment effect with IPTW (5 points)
+
+Estimate the treatment effect for the correct causal estimand using IPTW. Report your point estimate and a corrected standard error. 
+
+```{r}
+# outcome model using IPTW
+library(MatchIt) 
+library(survey)  
+library(lmtest) 
+
+lm_model<-lm(ppvtr.36 ~ treat + momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income , data = ihdp, weights = ihdp$weights)
+
+#summary of the model
+summary(lm_model)
+
+cat("The point estimate is 10.28 and the corrected standard error is 0.95.")
+```
+
+#### Question 9: Estimate the treatment effect with Matching (5 points)
+Estimate the treatment effect for the correct causal estimand using your matching model from Question 5. Report your point estimate and and a corrected standard error. 
+
+```{r}
+# outcome model using matching
+results <- propensity_match(ihdp, treat ~ momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income, cov_names)
+
+my_weights <- result$match_out$weights
+
+weighted_analysis <- lm(ppvtr.36 ~ treat + momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income , data = ihdp, weights = my_weights)
+
+summary(weighted_analysis)
+
+cat("The point estimate is 11.63 and the corrected standard error is 1.54.")
+```
+
+
+#### Question 10: Causal Interpretation (10 points)
+Provide a causal interpretation of your estimate of your preferred model (the model fit in Question 8 or 9). Include all relevant causal assumptions. 
+
+I prefer the model with IPTW because it has got less corrected standard error and there is some difference between two estimates of ATT. Causal assumptions include: SUVTA(i.e. no interaction effect between covariates), ignorability(i.e. can ignore the effects of underlying variables that has not been included), there are no post-treatment covariates(assume income one year after birth as a pre-treatment variable) in this dataset.
+
+#### Question 11: Comparison to linear regression 
+**Part a** (5 points)
+Fit a regression of your outcomes to the treatment indicator and covariates.
+
+```{r}
+# fit linear model
+lin_model <- lm(ppvtr.36~treat+momage + b.marr + factor(momed) + work.dur + prenatal + cig + sex + bw + bwg + preterm + black + hispanic + white + lths + hs + ltcoll + college + dayskidh + income,data=ihdp)
+summary(lin_model)
+```
+
+**Part b** (5 points) 
+Interpret the results of the program (coefficient on treat) non-causally.
+Since the treatment effect with estimand as ATT is positive, the IHDP intervention can increase the value of ppvtr.36, which is the IQ of the children at 3 years old.
+
+**Part c** (5 points) 
+Why might we prefer the results from the propensity score approach to the linear regression results in terms of identifying a causal effect?
+
+Because the linear regression approach needs the balance of the covariates between treatment group and control group and as can be seen in EDA part, the distribution between the treament group and control group for some covariates are quite different and imbalance. And the propensity score mathcing method can solve the problem directly and reduce the influence of imbalance distribution of covariates to find the casual relationship. That's why we prefer propensity socre matching on this dataset.
+
+
+
+
+
+
+
+
